@@ -17,7 +17,20 @@ pub enum CardValue {
 
 impl fmt::Display for CardValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", format!("{:?}", self).to_lowercase())
+        let value = match self {
+            CardValue::Ace => "A",
+            CardValue::Two => "2",
+            CardValue::Three => "3",
+            CardValue::Four => "4",
+            CardValue::Five => "5",
+            CardValue::Six => "6",
+            CardValue::Seven => "7",
+            CardValue::Eight => "8",
+            CardValue::Nine => "9",
+            CardValue::Ten => "10",
+        };
+
+        f.pad(value)
     }
 }
 
@@ -31,7 +44,14 @@ pub enum Suit {
 
 impl fmt::Display for Suit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", format!("{:?}", self).to_lowercase())
+        let symbol = match self {
+            Suit::Hearts => "♥",
+            Suit::Clubs => "♣",
+            Suit::Diamonds => "♦",
+            Suit::Spades => "♠",
+        };
+
+        f.pad(symbol)
     }
 }
 
@@ -75,9 +95,17 @@ impl Card {
     }
 
     pub fn card_to_ascii(&self) -> Vec<String> {
-        let card = vec![];
-
-        card
+        vec![
+            "┌─────────┐".to_string(),
+            format!("│{:<9}│", self.value),
+            "│         │".to_string(),
+            "│         │".to_string(),
+            format!("│{:^9}│", self.suit),
+            "│         │".to_string(),
+            "│         │".to_string(),
+            format!("│{:>9}│", self.value),
+            "└─────────┘".to_string(),
+        ]
     }
 
     pub fn print_hidden(&self) -> Vec<String> {
@@ -96,5 +124,3 @@ impl Card {
         card
     }
 }
-
-
