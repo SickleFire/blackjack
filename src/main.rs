@@ -1,6 +1,7 @@
-use std::io;
-use std::thread::sleep;
-use std::time::Duration;
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
 use blackjack::{
     card::{Card, CardValue, Hand}, game::Stage::{self, DealerDraws, DealingCards, GameEnd, PlayerDecision},
@@ -18,6 +19,8 @@ use ratatui::{
     widgets::{Block, Paragraph, Widget},
 };
 
+const DEALER_DRAW_DELAY: Duration = Duration::from_millis(500);
+
 fn main() -> io::Result<()> {
     ratatui::run(|terminal| App::default().run(terminal))
 }
@@ -29,6 +32,7 @@ pub struct App {
     player_bet: i32,
     dealer: Option<Hand>,
     player: Option<Hand>,
+    next_dealer_draw: Option<Instant>,
 }
 
 impl App {
@@ -48,6 +52,19 @@ impl App {
 
     /// updates the application's state based on user input
     fn handle_events(&mut self) -> io::Result<()> {
+        if self.stage == DealerDraws
+            && !event::poll(
+                self.next_dealer_draw
+                    .unwrap_or_else(Instant::now)
+                    .saturating_duration_since(Instant::now()),
+            )?
+        {
+            self.advance_dealer();
+            self.next_dealer_draw = (self.stage == DealerDraws)
+                .then(|| Instant::now() + DEALER_DRAW_DELAY);
+            return Ok(());
+        }
+
         match event::read()? {
             // it's important to check that the event is a key press event as
             // crossterm also emits key release and repeat events on Windows.
@@ -73,14 +90,23 @@ impl App {
                 self.stage = PlayerDecision;
             }
             Stage::PlayerDecision => {
-
             }
             Stage::DealerDraws => {
-
+                self.dealer.as_mut().unwrap().cards[1].face_up = true;
             }
             Stage::GameEnd => {
 
             }
+        }
+    }
+
+    fn advance_dealer(&mut self) {
+        let dealer = self.dealer.as_ref().unwrap();
+        if self.check_count(dealer) || self.check_17(dealer) {
+            self.stage = GameEnd;
+            self.next_dealer_draw = None;
+        } else {
+            self.draw_card(true);
         }
     }
 
@@ -142,15 +168,49 @@ impl App {
         count > 21
     }
 
+    fn check_17(&self, hand: &Hand) -> bool {
+        let mut count = 0;
+        let mut aces = 0;
+
+        for card in &hand.cards {
+            count += match &card.value {
+                CardValue::Ace => {
+                    aces += 1;
+                    1
+                }
+                CardValue::Two => 2,
+                CardValue::Three => 3,
+                CardValue::Four => 4,
+                CardValue::Five => 5,
+                CardValue::Six => 6,
+                CardValue::Seven => 7,
+                CardValue::Eight => 8,
+                CardValue::Nine => 9,
+                CardValue::Ten => 10,
+            };
+        }
+
+        if aces > 0 && count + 10 <= 21 {
+            count += 10;
+        }
+
+        count >= 17
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.stage == GameEnd && key_event.code != KeyCode::Char('q') {
+            return;
+        }
+        if self.stage == DealerDraws && key_event.code != KeyCode::Char('q') {
+            return;
+        }
+
         match key_event.code {
             KeyCode::Char('1') => {
                 self.stand()
             }
             KeyCode::Char('2') => {
                 self.hit();
-
-                sleep(Duration::from_millis(500));
 
                 if self.check_count(self.player.as_ref().unwrap()) {
                     self.stage = GameEnd;
@@ -173,6 +233,7 @@ impl App {
 
     fn stand(&mut self) {
         self.stage = DealerDraws;
+        self.next_dealer_draw = Some(Instant::now() + DEALER_DRAW_DELAY);
     }
 
     fn exit(&mut self) {
@@ -195,13 +256,20 @@ impl Widget for &App {
         ]);
         let block = Block::bordered()
             .title(title.centered())
-            .title_bottom(instructions.centered())
+            .title_bottom(if self.stage == GameEnd {
+                Line::from(" BUST! Press q to quit ".red().bold())
+            } else {
+                instructions.centered()
+            })
             .border_set(border::THICK);
 
         let inner = block.inner(area);
         block.render(area, buf);
 
-        if self.stage != PlayerDecision {
+        if self.stage != PlayerDecision
+            && self.stage != DealerDraws
+            && self.stage != GameEnd
+        {
             return;
         }
 
@@ -257,5 +325,49 @@ fn render_hand(hand: &Hand, area: Rect, buf: &mut Buffer) {
                 Style::default(),
             );
         }
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standing_reveals_dealers_hidden_card_and_finishes_at_17() {
+        let mut app = App {
+            dealer: Some(Hand {
+                cards: vec![Card::new(10, 1, true), Card::new(7, 2, false)],
+            }),
+            ..App::default()
+        };
+
+        app.stand();
+        app.handle_game_loop();
+
+        let dealer = app.dealer.as_ref().unwrap();
+        assert!(dealer.cards[1].face_up);
+        assert_eq!(dealer.cards.len(), 2);
+        assert_eq!(app.stage, DealerDraws);
+
+        app.advance_dealer();
+        assert_eq!(app.dealer.as_ref().unwrap().cards.len(), 2);
+        assert_eq!(app.stage, GameEnd);
+    }
+
+    #[test]
+    fn dealer_draws_one_card_per_advance() {
+        let mut app = App {
+            stage: DealerDraws,
+            dealer: Some(Hand {
+                cards: vec![Card::new(2, 1, true), Card::new(2, 2, true)],
+            }),
+            ..App::default()
+        };
+
+        app.advance_dealer();
+
+        assert_eq!(app.dealer.as_ref().unwrap().cards.len(), 3);
+        assert_eq!(app.stage, DealerDraws);
     }
 }
