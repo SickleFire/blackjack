@@ -1,14 +1,16 @@
-use std::{
-    io,
-    time::{Duration, Instant},
-};
+use std::io;
+use std::time::{Duration, Instant};
 
 use blackjack::{
-    card::{Card, CardValue, Hand}, game::Stage::{self, DealerDraws, DealingCards, GameEnd, PlayerDecision},
+    card::{Card, CardValue, Hand},
+    game::{
+        Outcome::{self, DealerBust, DealerWin, PlayerBust, PlayerWin, Push},
+        Stage::{self, DealerDraws, DealingCards, GameEnd, PlayerDecision},
+    },
 };
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-use rand::{Rng, RngExt};
+use rand::RngExt;
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
@@ -30,6 +32,7 @@ pub struct App {
     stage: Stage,
     exit: bool,
     player_bet: i32,
+    outcome: Outcome,
     dealer: Option<Hand>,
     player: Option<Hand>,
     next_dealer_draw: Option<Instant>,
@@ -102,7 +105,23 @@ impl App {
 
     fn advance_dealer(&mut self) {
         let dealer = self.dealer.as_ref().unwrap();
-        if self.check_count(dealer) || self.check_17(dealer) {
+
+        if self.check_count(dealer) {
+            self.outcome = DealerBust;
+            self.stage = GameEnd;
+            self.next_dealer_draw = None;
+            return;
+        }
+
+        let dealer_total = self.hand_total(dealer);
+        let player_total = self.hand_total(self.player.as_ref().unwrap());
+
+        if self.check_17(dealer) {
+            self.outcome = match dealer_total.cmp(&player_total) {
+                std::cmp::Ordering::Greater => DealerWin,
+                std::cmp::Ordering::Less => PlayerWin,
+                std::cmp::Ordering::Equal => Push,
+            };
             self.stage = GameEnd;
             self.next_dealer_draw = None;
         } else {
@@ -197,7 +216,44 @@ impl App {
         count >= 17
     }
 
+    fn hand_total(&self, hand: &Hand) -> i32 {
+        let mut total = 0;
+        let mut has_ace = false;
+
+        for card in &hand.cards {
+            total += match card.value {
+                CardValue::Ace => {
+                    has_ace = true;
+                    1
+                }
+                CardValue::Two => 2,
+                CardValue::Three => 3,
+                CardValue::Four => 4,
+                CardValue::Five => 5,
+                CardValue::Six => 6,
+                CardValue::Seven => 7,
+                CardValue::Eight => 8,
+                CardValue::Nine => 9,
+                CardValue::Ten => 10,
+            };
+        }
+
+        if has_ace && total + 10 <= 21 {
+            total += 10;
+        }
+
+        total
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.stage == GameEnd && key_event.code == KeyCode::Char('1') {
+            self.stage = DealingCards;
+            self.dealer = None;
+            self.player = None;
+            self.outcome = Outcome::default();
+            self.next_dealer_draw = None;
+            return;
+        }
         if self.stage == GameEnd && key_event.code != KeyCode::Char('q') {
             return;
         }
@@ -213,6 +269,7 @@ impl App {
                 self.hit();
 
                 if self.check_count(self.player.as_ref().unwrap()) {
+                    self.outcome = PlayerBust;
                     self.stage = GameEnd;
                 }
             }
@@ -254,10 +311,31 @@ impl Widget for &App {
             " Split ".into(),
             "<4> ".blue().bold(),
         ]);
+
+        let line = match self.outcome {
+            DealerWin => Line::from(
+                " Dealer Wins! Press 1 to play again or q to quit "
+                    .red()
+                    .bold(),
+            ),
+            PlayerWin => Line::from(
+                " Player Wins! Press 1 to play again or q to quit "
+                    .green()
+                    .bold(),
+            ),
+            DealerBust => Line::from(
+                " Dealer Bust! Press 1 to play again or q to quit "
+                    .green()
+                    .bold(),
+            ),
+            PlayerBust => Line::from(" BUST! Press 1 to play again or q to quit ".red().bold()),
+            Push => Line::from(" Push! Press 1 to play again or q to quit ".bold()),
+        };
+
         let block = Block::bordered()
             .title(title.centered())
             .title_bottom(if self.stage == GameEnd {
-                Line::from(" BUST! Press q to quit ".red().bold())
+                line
             } else {
                 instructions.centered()
             })
@@ -339,6 +417,9 @@ mod tests {
             dealer: Some(Hand {
                 cards: vec![Card::new(10, 1, true), Card::new(7, 2, false)],
             }),
+            player: Some(Hand {
+                cards: vec![Card::new(10, 1, true), Card::new(7, 2, true)],
+            }),
             ..App::default()
         };
 
@@ -362,6 +443,9 @@ mod tests {
             dealer: Some(Hand {
                 cards: vec![Card::new(2, 1, true), Card::new(2, 2, true)],
             }),
+            player: Some(Hand {
+                cards: vec![Card::new(10, 1, true), Card::new(8, 2, true)],
+            }),
             ..App::default()
         };
 
@@ -369,5 +453,38 @@ mod tests {
 
         assert_eq!(app.dealer.as_ref().unwrap().cards.len(), 3);
         assert_eq!(app.stage, DealerDraws);
+    }
+
+    #[test]
+    fn retry_starts_a_fresh_round() {
+        let mut app = App {
+            stage: GameEnd,
+            outcome: PlayerBust,
+            dealer: Some(Hand {
+                cards: vec![Card::new(10, 1, true), Card::new(8, 2, true)],
+            }),
+            player: Some(Hand {
+                cards: vec![Card::new(10, 1, true), Card::new(10, 2, true)],
+            }),
+            next_dealer_draw: Some(Instant::now()),
+            ..App::default()
+        };
+
+        app.handle_key_event(KeyEvent::new(
+            KeyCode::Char('1'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        assert_eq!(app.stage, DealingCards);
+        assert_eq!(app.outcome, Outcome::default());
+        assert!(app.dealer.is_none());
+        assert!(app.player.is_none());
+        assert!(app.next_dealer_draw.is_none());
+
+        app.handle_game_loop();
+
+        assert_eq!(app.stage, PlayerDecision);
+        assert_eq!(app.dealer.as_ref().unwrap().cards.len(), 2);
+        assert_eq!(app.player.as_ref().unwrap().cards.len(), 2);
     }
 }

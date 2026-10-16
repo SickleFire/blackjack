@@ -7,3 +7,13 @@ pub enum Stage {
     DealerDraws,
     GameEnd,
 }
+
+#[derive(Debug, Default, PartialEq)]
+pub enum Outcome{
+    PlayerBust,
+    #[default]
+    DealerBust,
+    PlayerWin,
+    DealerWin,
+    Push,
+}
