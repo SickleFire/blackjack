@@ -37,6 +37,9 @@ pub struct App {
     money: i32,
     dealer: Option<Hand>,
     player: Option<Hand>,
+    split_player: Option<Hand>,
+    active_hand: usize,
+    split_results: Option<[Outcome; 2]>,
     next_dealer_draw: Option<Instant>,
 }
 
@@ -50,6 +53,9 @@ impl Default for App {
             money: 500,
             dealer: None,
             player: None,
+            split_player: None,
+            active_hand: 0,
+            split_results: None,
             next_dealer_draw: None,
         }
     }
@@ -103,6 +109,9 @@ impl App {
             Stage::DealingCards => {
                 self.dealer = Some(self.deal_hand(true));
                 self.player = Some(self.deal_hand(false));
+                self.split_player = None;
+                self.active_hand = 0;
+                self.split_results = None;
 
                 self.stage = PlayerDecision;
             }
@@ -121,20 +130,27 @@ impl App {
         let dealer = self.dealer.as_ref().unwrap();
 
         if self.check_count(dealer) {
-            self.finish_round(DealerBust);
+            if self.split_player.is_some() {
+                self.finish_split_round(true);
+            } else {
+                self.finish_round(DealerBust);
+            }
             return;
         }
 
         let dealer_total = self.hand_total(dealer);
-        let player_total = self.hand_total(self.player.as_ref().unwrap());
-
         if self.check_17(dealer) {
-            let outcome = match dealer_total.cmp(&player_total) {
-                std::cmp::Ordering::Greater => DealerWin,
-                std::cmp::Ordering::Less => PlayerWin,
-                std::cmp::Ordering::Equal => Push,
-            };
-            self.finish_round(outcome);
+            if self.split_player.is_some() {
+                self.finish_split_round(false);
+            } else {
+                let player_total = self.hand_total(self.player.as_ref().unwrap());
+                let outcome = match dealer_total.cmp(&player_total) {
+                    std::cmp::Ordering::Greater => DealerWin,
+                    std::cmp::Ordering::Less => PlayerWin,
+                    std::cmp::Ordering::Equal => Push,
+                };
+                self.finish_round(outcome);
+            }
         } else {
             self.draw_card(true);
         }
@@ -155,6 +171,43 @@ impl App {
         self.outcome = outcome;
         self.stage = GameEnd;
         self.next_dealer_draw = None;
+    }
+
+    fn finish_split_round(&mut self, dealer_bust: bool) {
+        let dealer_total = self.hand_total(self.dealer.as_ref().unwrap());
+        let first = self.player.as_ref().unwrap();
+        let second = self.split_player.as_ref().unwrap();
+        let results = [
+            self.hand_outcome(first, dealer_total, dealer_bust),
+            self.hand_outcome(second, dealer_total, dealer_bust),
+        ];
+
+        for (hand, result) in [(first, results[0]), (second, results[1])] {
+            match result {
+                PlayerWin | DealerBust => self.money += hand.bet * 2,
+                Push => self.money += hand.bet,
+                PlayerBust | DealerWin => {}
+            }
+        }
+
+        self.split_results = Some(results);
+        self.outcome = results[0];
+        self.stage = GameEnd;
+        self.next_dealer_draw = None;
+    }
+
+    fn hand_outcome(&self, hand: &Hand, dealer_total: i32, dealer_bust: bool) -> Outcome {
+        if self.check_count(hand) {
+            PlayerBust
+        } else if dealer_bust {
+            DealerBust
+        } else {
+            match dealer_total.cmp(&self.hand_total(hand)) {
+                std::cmp::Ordering::Greater => DealerWin,
+                std::cmp::Ordering::Less => PlayerWin,
+                std::cmp::Ordering::Equal => Push,
+            }
+        }
     }
 
     fn deal_hand(&mut self, is_dealer: bool) -> Hand {
@@ -183,7 +236,90 @@ impl App {
         if is_dealer {
             self.dealer.as_mut().unwrap().cards.push(card);
         } else {
-            self.player.as_mut().unwrap().cards.push(card);
+            self.active_player_hand_mut().cards.push(card);
+        }
+    }
+
+    fn active_player_hand(&self) -> &Hand {
+        if self.active_hand == 0 {
+            self.player.as_ref().unwrap()
+        } else {
+            self.split_player.as_ref().unwrap()
+        }
+    }
+
+    fn active_player_hand_mut(&mut self) -> &mut Hand {
+        if self.active_hand == 0 {
+            self.player.as_mut().unwrap()
+        } else {
+            self.split_player.as_mut().unwrap()
+        }
+    }
+
+    fn start_dealer_draws(&mut self) {
+        self.stage = DealerDraws;
+        self.next_dealer_draw = Some(Instant::now() + DEALER_DRAW_DELAY);
+    }
+
+    fn finish_player_hand(&mut self) {
+        if self.split_player.is_some() && self.active_hand == 0 {
+            self.active_hand = 1;
+            self.stage = PlayerDecision;
+        } else if self.split_player.is_some()
+            && self.check_count(self.player.as_ref().unwrap())
+            && self.check_count(self.split_player.as_ref().unwrap())
+        {
+            self.finish_split_round(false);
+        } else {
+            self.start_dealer_draws();
+        }
+    }
+
+    fn player_busted(&mut self) {
+        if self.split_player.is_none() {
+            self.finish_round(PlayerBust);
+        } else if self.active_hand == 0 {
+            self.finish_player_hand();
+        } else if self.check_count(self.player.as_ref().unwrap()) {
+            self.finish_split_round(false);
+        } else {
+            self.finish_player_hand();
+        }
+    }
+
+    fn split(&mut self) {
+        let Some(hand) = self.player.as_ref() else {
+            return;
+        };
+        if self.split_player.is_some()
+            || hand.cards.len() != 2
+            || self.money < hand.bet
+            || self.card_value_to_i32(hand.cards[0].value)
+                != self.card_value_to_i32(hand.cards[1].value)
+        {
+            return;
+        }
+
+        let bet = hand.bet;
+        let is_aces = self.card_value_to_i32(hand.cards[0].value) == 11;
+        let mut cards = std::mem::take(&mut self.player.as_mut().unwrap().cards);
+        let first = cards.remove(0);
+        let second = cards.remove(0);
+        self.player.as_mut().unwrap().cards.push(first);
+        self.split_player = Some(Hand {
+            cards: vec![second],
+            bet,
+        });
+        self.money -= bet;
+        self.active_hand = 0;
+        self.split_results = None;
+        self.draw_card(false);
+        self.active_hand = 1;
+        self.draw_card(false);
+        self.active_hand = 0;
+
+        if is_aces {
+            self.start_dealer_draws();
         }
     }
 
@@ -279,6 +415,9 @@ impl App {
             self.stage = Stage::Betting;
             self.dealer = None;
             self.player = None;
+            self.split_player = None;
+            self.active_hand = 0;
+            self.split_results = None;
             self.outcome = Outcome::default();
             self.next_dealer_draw = None;
             return;
@@ -313,16 +452,14 @@ impl App {
             KeyCode::Char('2') => {
                 self.hit();
 
-                if self.check_count(self.player.as_ref().unwrap()) {
-                    self.finish_round(PlayerBust);
+                if self.check_count(self.active_player_hand()) {
+                    self.player_busted();
                 }
             }
             KeyCode::Char('3') => {
                 self.double()
             }
-            KeyCode::Char('4') => {
-                self.hit()
-            }
+            KeyCode::Char('4') => self.split(),
             KeyCode::Char('q') => self.exit(),
             _ => {}
         }
@@ -351,17 +488,20 @@ impl App {
     }
 
     fn stand(&mut self) {
-        self.stage = DealerDraws;
-        self.next_dealer_draw = Some(Instant::now() + DEALER_DRAW_DELAY);
+        self.finish_player_hand();
     }
 
     fn double(&mut self) {
-        let bet = self.player.as_ref().unwrap().bet;
+        let bet = self.active_player_hand().bet;
         if self.money >= bet {
             self.money -= bet;
-            self.player.as_mut().unwrap().bet *= 2;
+            self.active_player_hand_mut().bet *= 2;
             self.hit();
-            self.stand();
+            if self.check_count(self.active_player_hand()) {
+                self.player_busted();
+            } else {
+                self.stand();
+            }
         }
     }
 
@@ -383,7 +523,7 @@ impl Widget for &App {
                 "<2>".blue().bold(),
                 " Double ".into(),
                 "<3> ".blue().bold(),
-                " Split ".into(),
+                " Split pair ".into(),
                 "<4> ".blue().bold(),
             ])
         };
@@ -406,6 +546,11 @@ impl Widget for &App {
             ),
             PlayerBust => Line::from(" BUST! Press 1 to play again or q to quit ".red().bold()),
             Push => Line::from(" Push! Press 1 to play again or q to quit ".bold()),
+        };
+        let line = if self.split_results.is_some() {
+            Line::from(" Split round complete! Press 1 to play again or q to quit ".bold())
+        } else {
+            line
         };
 
         let block = Block::bordered()
@@ -446,6 +591,7 @@ impl Widget for &App {
             Constraint::Length(1),
             Constraint::Length(9),
             Constraint::Length(1),
+            Constraint::Length(1),
             Constraint::Length(9),
         ])
         .split(inner);
@@ -461,13 +607,68 @@ impl Widget for &App {
             .centered()
             .render(sections[0], buf);
         render_hand(self.dealer.as_ref().unwrap(), sections[1], buf);
-        Paragraph::new(format!(
-            "Player Cards: {} Bet: ${} Money: ${}",
-            player_card_value, player_bet, self.money
-        ))
+        if let Some(split_hand) = &self.split_player {
+            let hand_status = if self.stage == GameEnd {
+                "Split results".to_string()
+            } else {
+                format!(
+                    "Hand {} is active",
+                    if self.active_hand == 0 { "1" } else { "2" }
+                )
+            };
+            Paragraph::new(format!("{} | Money: ${}", hand_status, self.money))
+                .centered()
+                .render(sections[2], buf);
+
+            let hand_areas = Layout::horizontal([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(sections[3]);
+            let card_areas = Layout::horizontal([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(sections[4]);
+            let results = self.split_results;
+            let first_result = results.map(|value| outcome_label(value[0]));
+            let second_result = results.map(|value| outcome_label(value[1]));
+            Paragraph::new(format!(
+                "Hand 1: {} Bet: ${}{}",
+                self.hand_total(self.player.as_ref().unwrap()),
+                player_bet,
+                first_result.map(|text| format!(" - {}", text)).unwrap_or_default()
+            ))
             .centered()
-            .render(sections[2], buf);
-        render_hand(self.player.as_ref().unwrap(), sections[3], buf);
+            .render(hand_areas[0], buf);
+            Paragraph::new(format!(
+                "Hand 2: {} Bet: ${}{}",
+                self.hand_total(split_hand),
+                split_hand.bet,
+                second_result.map(|text| format!(" - {}", text)).unwrap_or_default()
+            ))
+            .centered()
+            .render(hand_areas[1], buf);
+            render_hand(self.player.as_ref().unwrap(), card_areas[0], buf);
+            render_hand(split_hand, card_areas[1], buf);
+        } else {
+            Paragraph::new(format!(
+                "Player Cards: {} Bet: ${} Money: ${}",
+                player_card_value, player_bet, self.money
+            ))
+            .centered()
+            .render(sections[3], buf);
+            render_hand(self.player.as_ref().unwrap(), sections[4], buf);
+        }
+    }
+}
+
+fn outcome_label(outcome: Outcome) -> &'static str {
+    match outcome {
+        PlayerBust => "Bust",
+        DealerBust | PlayerWin => "Win",
+        DealerWin => "Loss",
+        Push => "Push",
     }
 }
 
@@ -660,7 +861,7 @@ mod tests {
             stage: PlayerDecision,
             money: 25,
             player: Some(Hand {
-                cards: vec![Card::new(10, 1, true), Card::new(8, 2, true)],
+                cards: vec![Card::new(2, 1, true), Card::new(3, 2, true)],
                 bet: 50,
             }),
             ..App::default()
@@ -676,5 +877,87 @@ mod tests {
         assert_eq!(app.money, 0);
         assert_eq!(app.player.as_ref().unwrap().bet, 100);
         assert_eq!(app.stage, DealerDraws);
+    }
+
+    #[test]
+    fn splitting_requires_a_pair_and_enough_money_then_plays_both_hands() {
+        let mut app = App {
+            stage: PlayerDecision,
+            money: 24,
+            player: Some(Hand {
+                cards: vec![Card::new(8, 1, true), Card::new(9, 2, true)],
+                bet: 25,
+            }),
+            ..App::default()
+        };
+
+        app.split();
+        assert!(app.split_player.is_none());
+
+        app.player.as_mut().unwrap().cards[1] = Card::new(8, 2, true);
+        app.split();
+        assert!(app.split_player.is_none());
+
+        app.money = 50;
+        app.split();
+        assert_eq!(app.money, 25);
+        assert_eq!(app.player.as_ref().unwrap().bet, 25);
+        assert_eq!(app.split_player.as_ref().unwrap().bet, 25);
+        assert_eq!(app.player.as_ref().unwrap().cards.len(), 2);
+        assert_eq!(app.split_player.as_ref().unwrap().cards.len(), 2);
+        assert_eq!(app.active_hand, 0);
+
+        app.stand();
+        assert_eq!(app.stage, PlayerDecision);
+        assert_eq!(app.active_hand, 1);
+        app.stand();
+        assert_eq!(app.stage, DealerDraws);
+    }
+
+    #[test]
+    fn split_results_settle_each_hand_independently() {
+        let mut app = App {
+            stage: PlayerDecision,
+            money: 0,
+            dealer: Some(Hand {
+                cards: vec![Card::new(10, 1, true), Card::new(8, 2, true)],
+                bet: 0,
+            }),
+            player: Some(Hand {
+                cards: vec![Card::new(10, 1, true), Card::new(9, 2, true)],
+                bet: 25,
+            }),
+            split_player: Some(Hand {
+                cards: vec![Card::new(10, 3, true), Card::new(7, 4, true)],
+                bet: 25,
+            }),
+            ..App::default()
+        };
+
+        app.finish_split_round(false);
+
+        assert_eq!(app.money, 50);
+        assert_eq!(app.split_results, Some([PlayerWin, DealerWin]));
+        assert_eq!(app.stage, GameEnd);
+    }
+
+    #[test]
+    fn splitting_aces_deals_one_card_to_each_hand_and_ends_player_turn() {
+        let mut app = App {
+            stage: PlayerDecision,
+            money: 25,
+            player: Some(Hand {
+                cards: vec![Card::new(1, 1, true), Card::new(1, 2, true)],
+                bet: 25,
+            }),
+            ..App::default()
+        };
+
+        app.split();
+
+        assert_eq!(app.stage, DealerDraws);
+        assert_eq!(app.player.as_ref().unwrap().cards.len(), 2);
+        assert_eq!(app.split_player.as_ref().unwrap().cards.len(), 2);
+        assert_eq!(app.money, 0);
     }
 }

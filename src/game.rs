@@ -8,8 +8,8 @@ pub enum Stage {
     GameEnd,
 }
 
-#[derive(Debug, Default, PartialEq)]
-pub enum Outcome{
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum Outcome {
     PlayerBust,
     #[default]
     DealerBust,
