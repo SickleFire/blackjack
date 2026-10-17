@@ -61,6 +61,7 @@ impl fmt::Display for Suit {
 #[derive(Debug)]
 pub struct Hand {
     pub cards: Vec<Card>,
+    pub bet: i32,
 }
 
 #[derive(Debug)]

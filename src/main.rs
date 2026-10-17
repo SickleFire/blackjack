@@ -32,7 +32,6 @@ fn main() -> io::Result<()> {
 pub struct App {
     stage: Stage,
     exit: bool,
-    player_bet: i32,
     outcome: Outcome,
     dealer: Option<Hand>,
     player: Option<Hand>,
@@ -143,6 +142,7 @@ impl App {
 
         Hand {
             cards: vec![card1, card2],
+            bet: 100,
         }
     }
 
@@ -275,7 +275,7 @@ impl App {
                 }
             }
             KeyCode::Char('3') => {
-                self.hit()
+                self.double()
             }
             KeyCode::Char('4') => {
                 self.hit()
@@ -310,6 +310,12 @@ impl App {
     fn stand(&mut self) {
         self.stage = DealerDraws;
         self.next_dealer_draw = Some(Instant::now() + DEALER_DRAW_DELAY);
+    }
+
+    fn double(&mut self) {
+        self.player.as_mut().unwrap().bet *= 2;
+        self.hit();
+        self.stand();
     }
 
     fn exit(&mut self) {
@@ -383,12 +389,13 @@ impl Widget for &App {
             dealer_card_value = self.hand_total(self.dealer.as_ref().unwrap());
         }
         let player_card_value = self.hand_total(self.player.as_ref().unwrap());
+        let player_bet = self.player.as_ref().unwrap().bet;
 
         Paragraph::new(format!("Dealer Cards: {}", dealer_card_value))
             .centered()
             .render(sections[0], buf);
         render_hand(self.dealer.as_ref().unwrap(), sections[1], buf);
-        Paragraph::new(format!("Player Cards: {}", player_card_value))
+        Paragraph::new(format!("Player Cards: {} Bet: {}", player_card_value, player_bet))
             .centered()
             .render(sections[2], buf);
         render_hand(self.player.as_ref().unwrap(), sections[3], buf);
@@ -442,9 +449,11 @@ mod tests {
         let mut app = App {
             dealer: Some(Hand {
                 cards: vec![Card::new(10, 1, true), Card::new(7, 2, false)],
+                bet: 0,
             }),
             player: Some(Hand {
                 cards: vec![Card::new(10, 1, true), Card::new(7, 2, true)],
+                bet: 0,
             }),
             ..App::default()
         };
@@ -468,9 +477,11 @@ mod tests {
             stage: DealerDraws,
             dealer: Some(Hand {
                 cards: vec![Card::new(2, 1, true), Card::new(2, 2, true)],
+                bet: 0,
             }),
             player: Some(Hand {
                 cards: vec![Card::new(10, 1, true), Card::new(8, 2, true)],
+                bet: 0,
             }),
             ..App::default()
         };
@@ -488,9 +499,11 @@ mod tests {
             outcome: PlayerBust,
             dealer: Some(Hand {
                 cards: vec![Card::new(10, 1, true), Card::new(8, 2, true)],
+                bet: 0,
             }),
             player: Some(Hand {
                 cards: vec![Card::new(10, 1, true), Card::new(10, 2, true)],
+                bet: 0,
             }),
             next_dealer_draw: Some(Instant::now()),
             ..App::default()
