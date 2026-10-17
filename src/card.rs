@@ -1,10 +1,13 @@
-use crate::card::{CardValue::{Ace, Eight, Five, Four, Nine, Seven, Six, Ten, Three, Two}, Suit::{Diamonds, Hearts, Clubs, Spades}};
+use crate::card::{
+    CardValue::{Ace, Eight, Five, Four, Jack, King, Nine, Queen, Seven, Six, Ten, Three, Two},
+    Suit::{Clubs, Diamonds, Hearts, Spades},
+};
 use ratatui::{
     text::{Line, Span},
     style::{Color, Style},
 };
 use std::fmt;
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum CardValue {
     Ace,
     Two,
@@ -16,6 +19,9 @@ pub enum CardValue {
     Eight,
     Nine,
     Ten,
+    Jack,
+    Queen,
+    King,
 }
 
 impl fmt::Display for CardValue {
@@ -31,6 +37,9 @@ impl fmt::Display for CardValue {
             CardValue::Eight => "8",
             CardValue::Nine => "9",
             CardValue::Ten => "10",
+            CardValue::Jack => "J",
+            CardValue::Queen => "Q",
+            CardValue::King => "K",
         };
 
         f.pad(value)
@@ -84,6 +93,9 @@ impl Card {
             8 => Eight,
             9 => Nine,
             10 => Ten,
+            11 => Jack,
+            12 => Queen,
+            13 => King,
             _ => panic!("Unsupported card value: {}", value),
         };
 
@@ -98,7 +110,7 @@ impl Card {
         Self { value, suit, face_up }
     }
 
-pub fn card_to_ascii(&self) -> Vec<Line<'static>> {
+    pub fn card_to_ascii(&self) -> Vec<Line<'static>> {
         let is_red = self.suit == Diamonds || self.suit == Hearts;
         let suit_color = if is_red { Color::Red } else { Color::Reset };
 
@@ -143,5 +155,24 @@ pub fn card_to_ascii(&self) -> Vec<Line<'static>> {
             Line::from("│░░░░░░░░░│"),
             Line::from("└─────────┘"),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn face_cards_have_jack_queen_and_king_labels() {
+        assert_eq!(CardValue::Jack.to_string(), "J");
+        assert_eq!(CardValue::Queen.to_string(), "Q");
+        assert_eq!(CardValue::King.to_string(), "K");
+    }
+
+    #[test]
+    fn constructor_accepts_face_card_ranks() {
+        assert!(matches!(Card::new(11, 1, true).value, CardValue::Jack));
+        assert!(matches!(Card::new(12, 1, true).value, CardValue::Queen));
+        assert!(matches!(Card::new(13, 1, true).value, CardValue::King));
     }
 }

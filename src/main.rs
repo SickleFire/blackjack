@@ -212,8 +212,8 @@ impl App {
 
     fn deal_hand(&mut self, is_dealer: bool) -> Hand {
         let mut rng = rand::rng();
-        let val1 = rng.random_range(1..=10);
-        let val2 = rng.random_range(1..=10);
+        let val1 = rng.random_range(1..=13);
+        let val2 = rng.random_range(1..=13);
 
         let suit1 = rng.random_range(1..=4);
         let suit2 = rng.random_range(1..=4);
@@ -229,7 +229,7 @@ impl App {
 
     fn draw_card(&mut self, is_dealer: bool) {
         let mut rng = rand::rng();
-        let val = rng.random_range(1..=10);
+        let val = rng.random_range(1..=13);
         let suit = rng.random_range(1..=4);
         let card = Card::new(val, suit,true);
 
@@ -294,14 +294,13 @@ impl App {
         if self.split_player.is_some()
             || hand.cards.len() != 2
             || self.money < hand.bet
-            || self.card_value_to_i32(hand.cards[0].value)
-                != self.card_value_to_i32(hand.cards[1].value)
+            || hand.cards[0].value != hand.cards[1].value
         {
             return;
         }
 
         let bet = hand.bet;
-        let is_aces = self.card_value_to_i32(hand.cards[0].value) == 11;
+        let is_aces = hand.cards[0].value == CardValue::Ace;
         let mut cards = std::mem::take(&mut self.player.as_mut().unwrap().cards);
         let first = cards.remove(0);
         let second = cards.remove(0);
@@ -342,6 +341,7 @@ impl App {
                 CardValue::Eight => 8,
                 CardValue::Nine => 9,
                 CardValue::Ten => 10,
+                CardValue::Jack | CardValue::Queen | CardValue::King => 10,
             };
         }
 
@@ -371,6 +371,7 @@ impl App {
                 CardValue::Eight => 8,
                 CardValue::Nine => 9,
                 CardValue::Ten => 10,
+                CardValue::Jack | CardValue::Queen | CardValue::King => 10,
             };
         }
 
@@ -400,6 +401,7 @@ impl App {
                 CardValue::Eight => 8,
                 CardValue::Nine => 9,
                 CardValue::Ten => 10,
+                CardValue::Jack | CardValue::Queen | CardValue::King => 10,
             };
         }
 
@@ -477,7 +479,7 @@ impl App {
             CardValue::Seven => out = 7,
             CardValue::Eight => out = 8,
             CardValue::Nine => out = 9,
-            CardValue::Ten => out = 10,
+            CardValue::Ten | CardValue::Jack | CardValue::Queen | CardValue::King => out = 10,
         }
 
         out
@@ -959,5 +961,22 @@ mod tests {
         assert_eq!(app.player.as_ref().unwrap().cards.len(), 2);
         assert_eq!(app.split_player.as_ref().unwrap().cards.len(), 2);
         assert_eq!(app.money, 0);
+    }
+
+    #[test]
+    fn face_cards_score_ten_but_different_face_ranks_cannot_be_split() {
+        let mut app = App {
+            stage: PlayerDecision,
+            money: 100,
+            player: Some(Hand {
+                cards: vec![Card::new(11, 1, true), Card::new(13, 2, true)],
+                bet: 25,
+            }),
+            ..App::default()
+        };
+
+        assert_eq!(app.hand_total(app.player.as_ref().unwrap()), 20);
+        app.split();
+        assert!(app.split_player.is_none());
     }
 }
