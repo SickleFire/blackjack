@@ -15,7 +15,7 @@ use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    style::{Style, Stylize},
+    style::Stylize,
     symbols::border,
     text::Line,
     widgets::{Block, Paragraph, Widget},
@@ -28,14 +28,31 @@ fn main() -> io::Result<()> {
     ratatui::run(|terminal| App::default().run(terminal))
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct App {
     stage: Stage,
     exit: bool,
     outcome: Outcome,
+    selected_bet: i32,
+    money: i32,
     dealer: Option<Hand>,
     player: Option<Hand>,
     next_dealer_draw: Option<Instant>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            stage: Stage::default(),
+            exit: false,
+            outcome: Outcome::default(),
+            selected_bet: 25,
+            money: 500,
+            dealer: None,
+            player: None,
+            next_dealer_draw: None,
+        }
+    }
 }
 
 impl App {
@@ -82,10 +99,7 @@ impl App {
 
     fn handle_game_loop(&mut self) {
         match self.stage {
-            Stage::Betting => {
-
-                self.stage = DealingCards;
-            }
+            Stage::Betting => {}
             Stage::DealingCards => {
                 self.dealer = Some(self.deal_hand(true));
                 self.player = Some(self.deal_hand(false));
@@ -107,9 +121,7 @@ impl App {
         let dealer = self.dealer.as_ref().unwrap();
 
         if self.check_count(dealer) {
-            self.outcome = DealerBust;
-            self.stage = GameEnd;
-            self.next_dealer_draw = None;
+            self.finish_round(DealerBust);
             return;
         }
 
@@ -117,16 +129,32 @@ impl App {
         let player_total = self.hand_total(self.player.as_ref().unwrap());
 
         if self.check_17(dealer) {
-            self.outcome = match dealer_total.cmp(&player_total) {
+            let outcome = match dealer_total.cmp(&player_total) {
                 std::cmp::Ordering::Greater => DealerWin,
                 std::cmp::Ordering::Less => PlayerWin,
                 std::cmp::Ordering::Equal => Push,
             };
-            self.stage = GameEnd;
-            self.next_dealer_draw = None;
+            self.finish_round(outcome);
         } else {
             self.draw_card(true);
         }
+    }
+
+    fn finish_round(&mut self, outcome: Outcome) {
+        if self.stage == GameEnd {
+            return;
+        }
+
+        let bet = self.player.as_ref().unwrap().bet;
+        match outcome {
+            PlayerWin | DealerBust => self.money += bet * 2,
+            Push => self.money += bet,
+            PlayerBust | DealerWin => {}
+        }
+
+        self.outcome = outcome;
+        self.stage = GameEnd;
+        self.next_dealer_draw = None;
     }
 
     fn deal_hand(&mut self, is_dealer: bool) -> Hand {
@@ -142,7 +170,7 @@ impl App {
 
         Hand {
             cards: vec![card1, card2],
-            bet: 100,
+            bet: if is_dealer { 0 } else { self.selected_bet },
         }
     }
 
@@ -248,7 +276,7 @@ impl App {
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.stage == GameEnd && key_event.code == KeyCode::Char('1') {
-            self.stage = DealingCards;
+            self.stage = Stage::Betting;
             self.dealer = None;
             self.player = None;
             self.outcome = Outcome::default();
@@ -262,6 +290,22 @@ impl App {
             return;
         }
 
+        if self.stage == Stage::Betting {
+            match key_event.code {
+                KeyCode::Char('1') => self.selected_bet = 25,
+                KeyCode::Char('2') => self.selected_bet = 50,
+                KeyCode::Char('3') => self.selected_bet = 100,
+                KeyCode::Enter if self.selected_bet <= self.money => {
+                    self.money -= self.selected_bet;
+                    self.stage = DealingCards;
+                }
+                KeyCode::Enter => {}
+                KeyCode::Char('q') => self.exit(),
+                _ => {}
+            }
+            return;
+        }
+
         match key_event.code {
             KeyCode::Char('1') => {
                 self.stand()
@@ -270,8 +314,7 @@ impl App {
                 self.hit();
 
                 if self.check_count(self.player.as_ref().unwrap()) {
-                    self.outcome = PlayerBust;
-                    self.stage = GameEnd;
+                    self.finish_round(PlayerBust);
                 }
             }
             KeyCode::Char('3') => {
@@ -313,9 +356,13 @@ impl App {
     }
 
     fn double(&mut self) {
-        self.player.as_mut().unwrap().bet *= 2;
-        self.hit();
-        self.stand();
+        let bet = self.player.as_ref().unwrap().bet;
+        if self.money >= bet {
+            self.money -= bet;
+            self.player.as_mut().unwrap().bet *= 2;
+            self.hit();
+            self.stand();
+        }
     }
 
     fn exit(&mut self) {
@@ -326,16 +373,20 @@ impl App {
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let title = Line::from(" blackjack ".bold());
-        let instructions = Line::from(vec![
-            " Stand ".into(),
-            "<1>".blue().bold(),
-            " Hit ".into(),
-            "<2>".blue().bold(),
-            " Double ".into(),
-            "<3> ".blue().bold(),
-            " Split ".into(),
-            "<4> ".blue().bold(),
-        ]);
+        let instructions = if self.stage == Stage::Betting {
+            Line::from(" Choose bet: 1 = 25, 2 = 50, 3 = 100 | Enter to deal | q to quit ")
+        } else {
+            Line::from(vec![
+                " Stand ".into(),
+                "<1>".blue().bold(),
+                " Hit ".into(),
+                "<2>".blue().bold(),
+                " Double ".into(),
+                "<3> ".blue().bold(),
+                " Split ".into(),
+                "<4> ".blue().bold(),
+            ])
+        };
 
         let line = match self.outcome {
             DealerWin => Line::from(
@@ -369,6 +420,21 @@ impl Widget for &App {
         let inner = block.inner(area);
         block.render(area, buf);
 
+        if self.stage == Stage::Betting {
+            let status = if self.selected_bet > self.money {
+                "\nNot enough money for this bet"
+            } else {
+                ""
+            };
+            Paragraph::new(format!(
+                "Money: ${}\nSelected bet: ${}{}",
+                self.money, self.selected_bet, status
+            ))
+                .centered()
+                .render(inner, buf);
+            return;
+        }
+
         if self.stage != PlayerDecision
             && self.stage != DealerDraws
             && self.stage != GameEnd
@@ -395,7 +461,10 @@ impl Widget for &App {
             .centered()
             .render(sections[0], buf);
         render_hand(self.dealer.as_ref().unwrap(), sections[1], buf);
-        Paragraph::new(format!("Player Cards: {} Bet: {}", player_card_value, player_bet))
+        Paragraph::new(format!(
+            "Player Cards: {} Bet: ${} Money: ${}",
+            player_card_value, player_bet, self.money
+        ))
             .centered()
             .render(sections[2], buf);
         render_hand(self.player.as_ref().unwrap(), sections[3], buf);
@@ -411,7 +480,7 @@ fn render_hand(hand: &Hand, area: Rect, buf: &mut Buffer) {
         .iter()
         .fold(0u16, |width, _| width.saturating_add(CARD_WIDTH + CARD_SPACING))
         .saturating_sub(CARD_SPACING);
-    
+
     let start_x = area
         .x
         .saturating_add(area.width.saturating_sub(hand_width) / 2);
@@ -514,7 +583,7 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         ));
 
-        assert_eq!(app.stage, DealingCards);
+        assert_eq!(app.stage, Stage::Betting);
         assert_eq!(app.outcome, Outcome::default());
         assert!(app.dealer.is_none());
         assert!(app.player.is_none());
@@ -522,8 +591,90 @@ mod tests {
 
         app.handle_game_loop();
 
+        assert_eq!(app.stage, Stage::Betting);
+        app.handle_key_event(KeyEvent::new(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        app.handle_game_loop();
+
         assert_eq!(app.stage, PlayerDecision);
         assert_eq!(app.dealer.as_ref().unwrap().cards.len(), 2);
         assert_eq!(app.player.as_ref().unwrap().cards.len(), 2);
+        assert_eq!(app.player.as_ref().unwrap().bet, 25);
+        assert_eq!(app.money, 475);
+    }
+
+    #[test]
+    fn betting_keys_select_amount_and_enter_starts_round() {
+        let mut app = App::default();
+
+        for (key, expected_bet) in [('1', 25), ('2', 50), ('3', 100)] {
+            app.handle_key_event(KeyEvent::new(
+                KeyCode::Char(key),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+            assert_eq!(app.selected_bet, expected_bet);
+            assert_eq!(app.stage, Stage::Betting);
+        }
+
+        app.handle_key_event(KeyEvent::new(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(app.stage, DealingCards);
+        assert_eq!(app.money, 400);
+    }
+
+    #[test]
+    fn round_results_update_money_and_cannot_be_settled_twice() {
+        let mut app = App {
+            stage: PlayerDecision,
+            money: 450,
+            player: Some(Hand {
+                cards: vec![Card::new(10, 1, true), Card::new(8, 2, true)],
+                bet: 50,
+            }),
+            ..App::default()
+        };
+
+        app.finish_round(PlayerWin);
+        assert_eq!(app.money, 550);
+
+        app.finish_round(PlayerWin);
+        assert_eq!(app.money, 550);
+
+        app.stage = PlayerDecision;
+        app.money = 450;
+        app.finish_round(DealerWin);
+        assert_eq!(app.money, 450);
+
+        app.stage = PlayerDecision;
+        app.finish_round(Push);
+        assert_eq!(app.money, 500);
+    }
+
+    #[test]
+    fn double_down_only_uses_money_when_the_extra_bet_is_affordable() {
+        let mut app = App {
+            stage: PlayerDecision,
+            money: 25,
+            player: Some(Hand {
+                cards: vec![Card::new(10, 1, true), Card::new(8, 2, true)],
+                bet: 50,
+            }),
+            ..App::default()
+        };
+
+        app.double();
+        assert_eq!(app.money, 25);
+        assert_eq!(app.player.as_ref().unwrap().bet, 50);
+        assert_eq!(app.stage, PlayerDecision);
+
+        app.money = 50;
+        app.double();
+        assert_eq!(app.money, 0);
+        assert_eq!(app.player.as_ref().unwrap().bet, 100);
+        assert_eq!(app.stage, DealerDraws);
     }
 }
