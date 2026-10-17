@@ -1,7 +1,10 @@
 use crate::card::{CardValue::{Ace, Eight, Five, Four, Nine, Seven, Six, Ten, Three, Two}, Suit::{Diamonds, Hearts, Clubs, Spades}};
+use ratatui::{
+    text::{Line, Span},
+    style::{Color, Style},
+};
 use std::fmt;
-
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum CardValue {
     Ace,
     Two,
@@ -34,7 +37,7 @@ impl fmt::Display for CardValue {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Suit {
     Hearts,
     Clubs,
@@ -94,33 +97,50 @@ impl Card {
         Self { value, suit, face_up }
     }
 
-    pub fn card_to_ascii(&self) -> Vec<String> {
+pub fn card_to_ascii(&self) -> Vec<Line<'static>> {
+        let is_red = self.suit == Diamonds || self.suit == Hearts;
+        let suit_color = if is_red { Color::Red } else { Color::Reset };
+
+        let top_val = format!("{:<9}", self.value);
+        let mid_suit = format!("{:^9}", self.suit);
+        let bot_val = format!("{:>9}", self.value);
+
         vec![
-            "┌─────────┐".to_string(),
-            format!("│{:<9}│", self.value),
-            "│         │".to_string(),
-            "│         │".to_string(),
-            format!("│{:^9}│", self.suit),
-            "│         │".to_string(),
-            "│         │".to_string(),
-            format!("│{:>9}│", self.value),
-            "└─────────┘".to_string(),
+            Line::from("┌─────────┐"),
+            Line::from(vec![
+                Span::raw("│"),
+                Span::styled(top_val, Style::default()),
+                Span::raw("│"),
+            ]),
+            Line::from("│         │"),
+            Line::from("│         │"),
+            Line::from(vec![
+                Span::raw("│"),
+                Span::styled(mid_suit, Style::default().fg(suit_color)),
+                Span::raw("│"),
+            ]),
+            Line::from("│         │"),
+            Line::from("│         │"),
+            Line::from(vec![
+                Span::raw("│"),
+                Span::styled(bot_val, Style::default()),
+                Span::raw("│"),
+            ]),
+            Line::from("└─────────┘"),
         ]
     }
 
-    pub fn print_hidden(&self) -> Vec<String> {
-        let card = vec![
-            "┌─────────┐".to_string(),
-            "│░░░░░░░░░│".to_string(),
-            "│░░░░░░░░░│".to_string(),
-            "│░░░░░░░░░│".to_string(),
-            "│░░░░░░░░░│".to_string(),
-            "│░░░░░░░░░│".to_string(),
-            "│░░░░░░░░░│".to_string(),
-            "│░░░░░░░░░│".to_string(),
-            "└─────────┘".to_string(),
-        ];
-
-        card
+    pub fn print_hidden(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from("┌─────────┐"),
+            Line::from("│░░░░░░░░░│"),
+            Line::from("│░░░░░░░░░│"),
+            Line::from("│░░░░░░░░░│"),
+            Line::from("│░░░░░░░░░│"),
+            Line::from("│░░░░░░░░░│"),
+            Line::from("│░░░░░░░░░│"),
+            Line::from("│░░░░░░░░░│"),
+            Line::from("└─────────┘"),
+        ]
     }
 }

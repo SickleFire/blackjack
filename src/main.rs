@@ -24,6 +24,7 @@ use ratatui::{
 const DEALER_DRAW_DELAY: Duration = Duration::from_millis(500);
 
 fn main() -> io::Result<()> {
+    colored::control::set_override(true);
     ratatui::run(|terminal| App::default().run(terminal))
 }
 
@@ -284,6 +285,24 @@ impl App {
         }
     }
 
+    fn card_value_to_i32(&self, value: CardValue) -> i32 {
+        let out: i32;
+        match value {
+            CardValue::Ace => out = 11,
+            CardValue::Two => out = 2,
+            CardValue::Three => out = 3,
+            CardValue::Four => out = 4,
+            CardValue::Five => out = 5,
+            CardValue::Six => out = 6,
+            CardValue::Seven => out = 7,
+            CardValue::Eight => out = 8,
+            CardValue::Nine => out = 9,
+            CardValue::Ten => out = 10,
+        }
+
+        out
+    }
+
     fn hit(&mut self) {
         self.draw_card(false);
     }
@@ -359,11 +378,17 @@ impl Widget for &App {
         ])
         .split(inner);
 
-        Paragraph::new("Dealer Cards:")
+        let mut dealer_card_value = self.card_value_to_i32(self.dealer.as_ref().unwrap().cards[0].value);
+        if self.stage == DealerDraws || self.stage == GameEnd {
+            dealer_card_value = self.hand_total(self.dealer.as_ref().unwrap());
+        }
+        let player_card_value = self.hand_total(self.player.as_ref().unwrap());
+
+        Paragraph::new(format!("Dealer Cards: {}", dealer_card_value))
             .centered()
             .render(sections[0], buf);
         render_hand(self.dealer.as_ref().unwrap(), sections[1], buf);
-        Paragraph::new("Player Cards:")
+        Paragraph::new(format!("Player Cards: {}", player_card_value))
             .centered()
             .render(sections[2], buf);
         render_hand(self.player.as_ref().unwrap(), sections[3], buf);
@@ -379,6 +404,7 @@ fn render_hand(hand: &Hand, area: Rect, buf: &mut Buffer) {
         .iter()
         .fold(0u16, |width, _| width.saturating_add(CARD_WIDTH + CARD_SPACING))
         .saturating_sub(CARD_SPACING);
+    
     let start_x = area
         .x
         .saturating_add(area.width.saturating_sub(hand_width) / 2);
@@ -389,22 +415,22 @@ fn render_hand(hand: &Hand, area: Rect, buf: &mut Buffer) {
         } else {
             card.print_hidden()
         };
+
         let card_x = start_x.saturating_add(
             (index as u16).saturating_mul(CARD_WIDTH + CARD_SPACING),
         );
-        let visible_width = CARD_WIDTH.min(area.right().saturating_sub(card_x)) as usize;
 
-        for (row, line) in lines.iter().enumerate().take(area.height as usize) {
-            buf.set_stringn(
-                card_x,
-                area.y.saturating_add(row as u16),
-                line,
-                visible_width,
-                Style::default(),
-            );
-        }
+        // Define the exact sub-area for this specific card
+        let card_area = Rect {
+            x: card_x,
+            y: area.y,
+            width: CARD_WIDTH.min(area.right().saturating_sub(card_x)),
+            height: (lines.len() as u16).min(area.height),
+        };
+
+        // Render the card's lines (with their Spans and colors intact) into the buffer
+        Paragraph::new(lines).render(card_area, buf);
     }
-
 }
 
 #[cfg(test)]
