@@ -163,7 +163,12 @@ impl App {
 
         let bet = self.player.as_ref().unwrap().bet;
         match outcome {
-            PlayerWin | DealerBust => self.money += bet * 2,
+            PlayerWin | DealerBust => { if !self.check_blackjack(){
+                    self.money += bet * 2
+                } else {
+                    self.money += bet * 5 / 2;
+                }
+            }
             Push => self.money += bet,
             PlayerBust | DealerWin => {}
         }
@@ -184,7 +189,12 @@ impl App {
 
         for (hand, result) in [(first, results[0]), (second, results[1])] {
             match result {
-                PlayerWin | DealerBust => self.money += hand.bet * 2,
+                PlayerWin | DealerBust => { if !self.check_blackjack(){
+                    self.money += hand.bet * 2
+                } else {
+                    self.money += hand.bet * 5 / 2;
+                }
+            }
                 Push => self.money += hand.bet,
                 PlayerBust | DealerWin => {}
             }
@@ -483,6 +493,12 @@ impl App {
         }
 
         out
+    }
+
+    fn check_blackjack(&self) -> bool {
+        self.player.as_ref().is_some_and(|hand| {
+            hand.cards.len() == 2 && self.hand_total(hand) == 21
+        })
     }
 
     fn hit(&mut self) {
@@ -855,6 +871,23 @@ mod tests {
         app.stage = PlayerDecision;
         app.finish_round(Push);
         assert_eq!(app.money, 500);
+    }
+
+    #[test]
+    fn blackjack_pays_three_to_two() {
+        let mut app = App {
+            stage: PlayerDecision,
+            money: 400,
+            player: Some(Hand {
+                cards: vec![Card::new(1, 1, true), Card::new(13, 2, true)],
+                bet: 100,
+            }),
+            ..App::default()
+        };
+
+        app.finish_round(PlayerWin);
+
+        assert_eq!(app.money, 650);
     }
 
     #[test]
